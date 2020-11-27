@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: configurator
+  name: configurator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: configurator
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: configurator
+    spec:
+      containers:
+      - image: laumih/configurator:latest
+        name: configurator
+        resources: {}
+        imagePullPolicy: Always
+        env:
+          - name: LOGLEVEL
+            value: "INFO"
+        volumeMounts:
+          - name: config-volume
+            mountPath: /home
+      imagePullSecrets:
+        - name: dregistry
+      volumes:
+        - name: config-volume
+          configMap:
+            name: mongo-config

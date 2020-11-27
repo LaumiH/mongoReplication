@@ -1,0 +1,14 @@
+{
+"_id": "rs0",
+"version": 1,
+"members":
+  [
+    {"_id": 0, "host": "mongo-0.gke-0.mongo.mongo.svc.clusterset.local:27017"},
+    {"_id": 1, "host": "mongo-1.gke-0.mongo.mongo.svc.clusterset.local:27017"},
+    {"_id": 2, "host": "mongo-2.gke-0.mongo.mongo.svc.clusterset.local:27017"},
+    {"_id": 3, "host": "mongo-2-0.gke-0.mongo-2.mongo-2.svc.clusterset.local:27017"},
+    {"_id": 4, "host": "mongo-0.gke-1.mongo.mongo.svc.clusterset.local:27017"},
+    {"_id": 5, "host": "mongo-1.gke-1.mongo.mongo.svc.clusterset.local:27017"},
+    {"_id": 6, "host": "mongo-2.gke-1.mongo.mongo.svc.clusterset.local:27017"}
+  ]                                    
+}

@@ -1,0 +1,34 @@
+version: '3.8'
+services:
+  mongo-0:
+    image: mongo:latest
+    container_name: mongo-0
+    ports:
+      - 30000:27017
+    environment:
+      - REPSET=rs0
+    networks:
+      - mongo-cluster
+    entrypoint: [ "/usr/bin/mongod", "--bind_ip", "0.0.0.0", "--replSet", "rs0" ]
+  mongo-1:
+    image: mongo:latest
+    container_name: mongo-1
+    ports:
+      - 30001:27017
+    environment:
+      - REPSET=rs0
+    networks:
+      - mongo-cluster
+    entrypoint: [ "/usr/bin/mongod", "--bind_ip", "0.0.0.0", "--replSet", "rs0" ]
+  mongo-2:
+    image: mongo:latest
+    container_name: mongo-2
+    ports:
+      - 30002:27017
+    environment:
+      - REPSET=rs0
+    networks:
+      - mongo-cluster
+    entrypoint: [ "/usr/bin/mongod", "--bind_ip", "0.0.0.0", "--replSet", "rs0" ]
+networks:
+  mongo-cluster:
