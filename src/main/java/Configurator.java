@@ -1,9 +1,12 @@
+import com.mongodb.MongoClient;
+import com.mongodb.MongoClientURI;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoTimeoutException;
 import com.mongodb.client.MongoDatabase;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import org.apache.commons.lang.StringUtils;
 import org.bson.Document;
 
 public class Configurator {
@@ -23,6 +26,14 @@ public class Configurator {
     return isMaster(mongo).getBoolean("ismaster");
   }
 
+  protected String deriveConnectionString(Document config, String repset) {
+    String connectionString = "mongodb://";
+    for (String member : getMembersFromConfig(config)) {
+      connectionString += member + ",";
+    }
+    return connectionString.substring(0, connectionString.length()-1) + "/?replicaSet=" + repset;
+  }
+
   private List<String> getMemberNameByState(MongoDatabase mongo, String stateStrToMatch) {
     assert replSetStatus(mongo) != null;
     List<String> filtered = new ArrayList<>();
@@ -34,7 +45,7 @@ public class Configurator {
       final String stateStr = member.getString("stateStr");
       if (stateStr.equalsIgnoreCase(stateStrToMatch))
         filtered.add(hostnameAndPort);
-      if (stateStrToMatch.equalsIgnoreCase("primary"))
+      if (stateStr.equalsIgnoreCase("primary"))
         return filtered;
     }
     if (filtered.isEmpty())
@@ -83,16 +94,29 @@ public class Configurator {
     Document result = null;
     try {
       result = mongo.runCommand(new Document("replSetGetStatus", 1));
-      //System.out.println(result.toJson());
     } catch (MongoCommandException mce) {
       if (mce.getErrorCodeName().contains("NotYetInitialized")) {
-        System.err.println("The ReplicaSet has not been initialized yet!");
+        Main.LOGGER.info("NotYetInitialized: The ReplicaSet has not been initialized yet.");
         return null;
       } else {
         mce.printStackTrace();
       }
     } catch (MongoTimeoutException mte) {
-      System.err.println("The ReplicaSet has not been initialized yet!");
+      // this can mean the set is not initialized, OR the replica set name is different than the initialized one!!
+      // I did not find any other valid way than to query each member inside the config for a rs
+      String memberList = StringUtils.substringBetween(Main.CONNECTION_STRING, "//", "/");
+      for (String member : memberList.split(",")) {
+        try (MongoClient mongoClient = new MongoClient(new MongoClientURI("mongodb://" + member))) {
+          MongoDatabase db = mongoClient.getDatabase("admin");
+          if (isReplicaSet(db)) {
+            result = replSetStatus(db);
+            Main.LOGGER.severe("ReplicaSet has been initialized with name " + result.getString("set") + "!");
+            Main.LOGGER.severe("ReplicaSet name of new config does not match old config, aborting!");
+            return result;
+          }
+        }
+      }
+      Main.LOGGER.info("MongoTimeoutException: The set has not been initialized yet.");
       return null;
     }
     return result;
@@ -108,90 +132,44 @@ public class Configurator {
     Document result;
     try {
       result = mongo.runCommand(new Document("replSetInitiate", config));
-      System.out.println("Initiation of rs successful.\n" + result.toJson());
+      Main.LOGGER.info("Initiation of rs successful.\n" + result.toJson());
     } catch (MongoCommandException e) {
-      System.out.println("The provided config is invalid. Provided config:\n" + config.toJson());
-      System.err.println(e.getErrorCodeName());
-      System.err.println(e.getResponse().toJson());
+      Main.LOGGER.severe(e.getErrorCodeName());
+      Main.LOGGER.severe("The provided config is invalid. Provided config:\n" + config.toJson());
+      Main.LOGGER.severe(e.getResponse().toJson());
       result = null;
     }
     return result;
   }
 
   protected Document replSetReconfig(final MongoDatabase mongo, Document config) {
-    //https://docs.mongodb.com/manual/reference/command/replSetReconfig/
-
-    // https://stackoverflow.com/questions/50489692/adding-arrays-as-kubernetes-environment-variables
-    // mount a js file into the container using a configmap
-    // https://towardsdatascience.com/how-to-deploy-a-mongodb-replica-set-using-docker-6d0b9ac00e49?gi=e1409ea6e91
-    /*
-    replica.js
-    rs.initiate({
-      _id: 'rs0',
-      members: [{
-        _id: 0,
-        host: 'mongo-0:27017'
-      },
-      {
-        _id: 1,
-        host: 'mongo-1:27017'
-      }]
-    })
-    */
-    /*
-    create configmap from file and use in pod
-    containers:
-      - name: ...
-        image: ...
-        volumeMounts:
-        - name: config-volume
-          mountPath: /etc/config
-    volumes:
-      - name: config-volume
-        configMap:
-          name: app-config
-    */
-
-    // https://docs.mongodb.com/manual/tutorial/write-scripts-for-the-mongo-shell/
-    // load("/data/db/scripts/myjstest.js")
-
-    /*
-    final BasicDBObject command = new BasicDBObject();
-    command.put("eval", String.format("function() { %s return;}}, {entity_id : 1, value : 1, type : 1}).forEach(someFun); }", code));
-    Document result = database.runCommand(command);
-    */
     Document result;
     try {
       result = mongo.runCommand(new Document("replSetReconfig", config));
-      System.out.println("Reconfig of rs successful.\n" + result.toJson());
+      Main.LOGGER.info("Reconfig of rs successful.\n" + result.toJson());
     } catch (MongoCommandException e) {
-      System.out.println("The provided config is invalid. Provided config:\n" + config.toJson());
-      System.err.println(e.getErrorCodeName());
-      System.err.println(e.getResponse().toJson());
+      Main.LOGGER.severe(e.getErrorCodeName());
+      Main.LOGGER.severe("The provided config is invalid. Provided config:\n" + config.toJson());
+      Main.LOGGER.severe(e.getResponse().toJson());
       result = null;
     }
     return result;
   }
 
   protected boolean equalConfigs(MongoDatabase db, Document newConfig) {
-    List<String> currentNames = new ArrayList<>();
-    List<Document> members_document = replSetStatus(db).getList("members", Document.class);
-    for (final Document member : members_document) {
-      final String name = member.getString("name");
-      currentNames.add(name);
+    Document replSetStatus = replSetStatus(db);
+    String currentRsName = replSetStatus.getString("set");
+    String newRsName = newConfig.getString("_id");
+    if (!currentRsName.equals(newRsName)) {
+      Main.LOGGER.severe("ReplicaSet name of new config does not match old config, aborting!");
+    } else {
+      List<String> currentNames = getMembersFromConfig(replSetStatus);
+      List<String> newNames = getMembersFromConfig(newConfig);
+      Collections.sort(currentNames);
+      Collections.sort(newNames);
+      return currentNames.equals(newNames);
     }
-
-    List<String> newNames = new ArrayList<>();
-    members_document = newConfig.getList("members", Document.class);
-    for (final Document member : members_document) {
-      final String name = member.getString("host");
-      newNames.add(name);
-    }
-
-    Collections.sort(currentNames);
-    Collections.sort(newNames);
-
-    return currentNames.equals(newNames);
+    return true;
   }
 
   protected int getVersionNumber(MongoDatabase db) {
@@ -202,5 +180,28 @@ public class Configurator {
       if (v > version) version = v;
     }
     return version;
+  }
+
+  protected List<String> getMembersFromConfig(Document config) {
+    List<String> members = new ArrayList<>();
+    List<Document> members_document = config.getList("members", Document.class);
+    String key = "name";
+    if (members_document.get(0).getString(key) == null) key = "host";
+    for (final Document member : members_document) {
+      members.add(member.getString(key));
+    }
+    return members;
+  }
+
+  protected boolean wouldDeletePrimary(MongoDatabase db, Document newConfig) {
+    String primary = getPrimaryAsString(db);
+    Main.LOGGER.info("Primary: " + primary + ", members: ");
+    List<String> newMembers = getMembersFromConfig(newConfig);
+    for (String s : newMembers) {
+      Main.LOGGER.info("\t" + s);
+    }
+    boolean result = !newMembers.contains(primary);
+    if (result) Main.LOGGER.severe("The primary currently is: " + primary);
+    return result;
   }
 }
